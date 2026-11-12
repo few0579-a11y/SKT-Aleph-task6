@@ -1,0 +1,35 @@
+:root {
+  --bg: #f6f5f2; --card: #fff; --ink: #1d1d1f; --mute: #6b6b70; --line: #e2e0da;
+  --acc: #2f5d50; --warn: #a4462f;
+  font-family: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); line-height: 1.5; }
+.top { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; padding: 12px 20px; background: var(--card); border-bottom: 1px solid var(--line); }
+.brand { font-weight: 700; color: var(--ink); text-decoration: none; font-size: 1.1rem; }
+nav a { margin-left: 14px; color: var(--acc); }
+main { max-width: 960px; margin: 0 auto; padding: 20px 16px; }
+h1 { font-size: 1.4rem; margin: .2em 0 .6em; }
+h2 { font-size: 1.1rem; margin: 0 0 .6em; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+label { display: flex; flex-direction: column; gap: 3px; font-size: .85rem; color: var(--mute); }
+input, select, textarea { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); }
+textarea { min-height: 70px; }
+button { font: inherit; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--acc); background: var(--acc); color: #fff; cursor: pointer; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; margin-top: 12px; }
+.mt { margin-top: 10px; }
+.muted { color: var(--mute); font-size: .85rem; }
+.err { color: var(--warn); }
+table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--mute); font-weight: 600; font-size: .8rem; white-space: nowrap; }
+.pre { white-space: pre-wrap; word-break: break-word; }
+details summary { cursor: pointer; color: var(--acc); font-weight: 600; }
+.rev { border-left: 3px solid var(--line); padding: 4px 10px; margin: 8px 0; }
+.rev.first { border-color: var(--acc); }
+.rev ul { margin: 4px 0; padding-left: 18px; }
+.old { color: var(--mute); text-decoration: line-through; }
+#toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: #1d1d1f; color: #fff; padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+#toast.show { opacity: 1; }
+@media (max-width: 600px) { .card { padding: 12px; } }
