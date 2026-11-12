@@ -7,9 +7,10 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+  <p class="notice" id="public-notice" role="note">지금은 로그인이 없어 링크를 아는 사람은 누구나 볼 수 있습니다. 남이 봐도 괜찮은 내용만 넣으세요</p>
   <header class="top">
     <a href="#/" class="brand">Plan-Do-See 다이어리</a>
-    <nav><a href="#/">계획 목록</a></nav>
+    <nav><a href="#/">계획 목록</a><a href="/api/export" id="export-link" download>전체 데이터 내보내기(JSON)</a></nav>
   </header>
   <main id="app" aria-live="polite"></main>
   <div id="toast" role="status"></div>

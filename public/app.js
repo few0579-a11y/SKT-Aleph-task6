@@ -51,6 +51,8 @@ const show = (k, v) => (k === 'priority' ? PRIO[v] : k === 'estimated_minutes' ?
 const formData = (form) => Object.fromEntries(new FormData(form).entries());
 const field = (label, input) => h('label', {}, label, input);
 const prioSelect = (val = 'medium') => h('select', { name: 'priority' }, ...Object.entries(PRIO).map(([k, v]) => h('option', { value: k, selected: k === val }, v)));
+// 화면 전체 교체. null(조건부로 빠지는 영역)은 건너뛴다 — replaceChildren은 null을 "null" 글자로 넣기 때문
+const render = (...nodes) => app.replaceChildren(...nodes.filter((n) => n !== null && n !== undefined && n !== false));
 const guard = (fn) => async (e) => { e?.preventDefault?.(); try { await fn(e); } catch (err) { toast(err.message); } };
 
 // 생성·수정 공용 입력 폼
@@ -166,7 +168,7 @@ async function planPage(pid, q = {}) {
           show(k, r.snapshot[k])))));
     }));
 
-  app.replaceChildren(
+  render(
     h('p', { class: 'row nav' }, h('a', { href: '#/' }, '← 계획 목록'), h('a', { class: 'btn', href: `#/plan/${p.id}/review` }, '회고 보기 →')),
     h('h1', {}, `계획 #${p.id} · `, p.title),
     p.carried_improvement ? h('div', { class: 'carry' }, `회고 #${p.from_review_id}에서 반영한 개선점: `, h('b', {}, p.carried_improvement)) : null,
@@ -237,7 +239,7 @@ async function reviewPage(pid, q) {
         }))))
     : h('p', { class: 'muted' }, '아직 저장한 회고가 없습니다.');
 
-  app.replaceChildren(
+  render(
     h('p', { class: 'row nav' }, h('a', { href: `#/plan/${p.id}` }, `← 계획 #${p.id}`)),
     h('h1', {}, `회고 · 계획 #${p.id} `, p.title),
     scopeNav, tiles, evidence,

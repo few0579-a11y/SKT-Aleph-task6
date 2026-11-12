@@ -1,0 +1,129 @@
+{
+  "name": "pds-schema",
+  "version": "2",
+  "app": "Plan-Do-See 다이어리 (ALEPH T06)",
+  "database": "PostgreSQL (Supabase)",
+  "source_of_truth": "db/schema.sql",
+  "checked_by": "scripts/check-contract.mjs (실제 DB의 information_schema와 이 파일을 비교)",
+
+  "rules": {
+    "dates": "date 컬럼(plans.period_start, plans.period_end, tasks.due_date, reviews.scope_from, reviews.scope_to)은 Asia/Seoul 달력 날짜 'YYYY-MM-DD'를 그대로 저장하고 그대로 표시한다. 시간대 변환을 하지 않는다.",
+    "timestamps": "timestamptz 컬럼은 UTC로 저장하고 API는 ISO-8601(UTC, 'Z')로 응답한다. 화면은 Asia/Seoul로 바꿔 표시한다.",
+    "timestamp_input": "시간대가 없는 입력 'YYYY-MM-DDTHH:mm'(화면의 datetime-local)은 서울 시간(+09:00)으로 해석한다.",
+    "today": "지연 판단의 '오늘' = (now() at time zone 'Asia/Seoul')::date",
+    "units": "시간 수치(estimated_minutes, actual_minutes, diff_minutes)는 모두 분(minute) 단위 정수다.",
+    "ids": "모든 id는 bigint identity. API·내보내기에서는 문자열로 표기한다.",
+    "soft_delete": "할 일 삭제는 tasks.deleted_at을 채운다. 목록·검색·집계·근거에서는 빼고, 내보내기에는 포함한다.",
+    "append_only": "plan_revisions, runs, reviews는 추가만 가능하고 수정·삭제는 트리거가 막는다. task_completions는 삭제 불가, undone_at을 한 번 채우는 것만 가능하다.",
+    "plan_history": "plans에 INSERT/UPDATE가 일어날 때마다 트리거가 그 버전 전체를 plan_revisions에 쌓는다(revision 1 = 최초 계획). 수정해도 plans.id는 바뀌지 않는다.",
+    "task_due_in_plan": "tasks.due_date는 소속 계획의 period_start ~ period_end 안이어야 한다(API 검사).",
+    "run_time": "runs는 ended_at > started_at, 계획 기간(서울 시간) 안, 종료 시각이 현재보다 늦지 않아야 한다. actual_minutes는 비우면 종료−시작(분, 반올림), 직접 적으면 종료−시작(올림) 이하.",
+    "idempotent_completion": "complete_task(task, key): 같은 idempotency_key 재요청이나 이미 유효한 완료가 있으면 새 기록을 만들지 않는다. 최종 방어는 유니크 제약 두 개(idempotency_key, task_id where undone_at is null).",
+    "sorting": "할 일 목록 정렬 = 화면에서 고른 기준(마감일·우선순위·예상 시간·등록 시각·제목)과 방향 → 같으면 id 오름차순. 정렬·검색·필터는 서버(SQL)에서 처리한다.",
+    "access": "로그인 없음(T07에서 적용). 모든 테이블 RLS 켜짐·정책 없음, Supabase Data API 꺼짐. 앱은 Vercel 서버 함수에서 DATABASE_URL로만 접근한다."
+  },
+
+  "tables": {
+    "plans": {
+      "description": "계획의 현재 값",
+      "columns": {
+        "id": { "type": "bigint", "nullable": false, "note": "PK, identity" },
+        "title": { "type": "text", "nullable": false, "note": "1~200자" },
+        "period_start": { "type": "date", "nullable": false, "note": "서울 날짜" },
+        "period_end": { "type": "date", "nullable": false, "note": "서울 날짜, period_start 이상" },
+        "priority": { "type": "text", "nullable": false, "note": "high | medium | low" },
+        "success_criteria": { "type": "text", "nullable": false, "note": "1~1000자" },
+        "estimated_minutes": { "type": "integer", "nullable": false, "note": "분, 0 이상" },
+        "revision": { "type": "integer", "nullable": false, "note": "수정마다 +1 (트리거)" },
+        "created_at": { "type": "timestamp with time zone", "nullable": false },
+        "updated_at": { "type": "timestamp with time zone", "nullable": false },
+        "from_review_id": { "type": "bigint", "nullable": true, "note": "FK reviews.id, 이 계획을 만든 회고" },
+        "carried_improvement": { "type": "text", "nullable": true, "note": "회고 개선점 문장의 복사본" }
+      }
+    },
+    "plan_revisions": {
+      "description": "계획의 모든 버전(추가만 가능)",
+      "columns": {
+        "id": { "type": "bigint", "nullable": false, "note": "PK" },
+        "plan_id": { "type": "bigint", "nullable": false, "note": "FK plans.id" },
+        "revision": { "type": "integer", "nullable": false },
+        "snapshot": { "type": "jsonb", "nullable": false, "note": "그 버전의 plans 행 전체" },
+        "saved_at": { "type": "timestamp with time zone", "nullable": false }
+      },
+      "unique": ["(plan_id, revision)"]
+    },
+    "tasks": {
+      "description": "계획에 속한 할 일",
+      "columns": {
+        "id": { "type": "bigint", "nullable": false, "note": "PK" },
+        "plan_id": { "type": "bigint", "nullable": false, "note": "FK plans.id" },
+        "title": { "type": "text", "nullable": false, "note": "1~200자" },
+        "due_date": { "type": "date", "nullable": false, "note": "서울 날짜, 계획 기간 안" },
+        "priority": { "type": "text", "nullable": false, "note": "high | medium | low" },
+        "tags": { "type": "ARRAY", "nullable": false, "note": "text[], 쉼표 입력을 정리해 저장(최대 10개, 각 30자)" },
+        "estimated_minutes": { "type": "integer", "nullable": false, "note": "분, 0 이상" },
+        "status": { "type": "text", "nullable": false, "note": "open | done" },
+        "completed_at": { "type": "timestamp with time zone", "nullable": true, "note": "status = done 일 때만 값" },
+        "deleted_at": { "type": "timestamp with time zone", "nullable": true, "note": "소프트 삭제 시각" },
+        "created_at": { "type": "timestamp with time zone", "nullable": false },
+        "updated_at": { "type": "timestamp with time zone", "nullable": false }
+      }
+    },
+    "task_completions": {
+      "description": "완료 기록(취소해도 남음)",
+      "columns": {
+        "id": { "type": "bigint", "nullable": false, "note": "PK" },
+        "task_id": { "type": "bigint", "nullable": false, "note": "FK tasks.id" },
+        "idempotency_key": { "type": "uuid", "nullable": false, "note": "화면이 만든 요청 키, unique" },
+        "completed_at": { "type": "timestamp with time zone", "nullable": false },
+        "undone_at": { "type": "timestamp with time zone", "nullable": true, "note": "완료 취소 시각" }
+      },
+      "unique": ["(idempotency_key)", "(task_id) where undone_at is null"]
+    },
+    "runs": {
+      "description": "실행 기록(추가만 가능, 계획·할 일 값을 바꾸지 않음)",
+      "columns": {
+        "id": { "type": "bigint", "nullable": false, "note": "PK" },
+        "task_id": { "type": "bigint", "nullable": false, "note": "FK tasks.id" },
+        "started_at": { "type": "timestamp with time zone", "nullable": false },
+        "ended_at": { "type": "timestamp with time zone", "nullable": false, "note": "started_at보다 늦음" },
+        "actual_minutes": { "type": "integer", "nullable": false, "note": "분, 0 이상, 종료−시작 이하" },
+        "blocker": { "type": "text", "nullable": true, "note": "막힘 사유, 비우면 null" },
+        "created_at": { "type": "timestamp with time zone", "nullable": false }
+      }
+    },
+    "reviews": {
+      "description": "회고(추가만 가능)",
+      "columns": {
+        "id": { "type": "bigint", "nullable": false, "note": "PK" },
+        "plan_id": { "type": "bigint", "nullable": false, "note": "FK plans.id" },
+        "scope_from": { "type": "date", "nullable": true, "note": "주차 회고의 시작(마감일 기준), 계획 전체면 null" },
+        "scope_to": { "type": "date", "nullable": true },
+        "improvement": { "type": "text", "nullable": false, "note": "다음 계획에 반영할 개선점 한 줄(1~300자)" },
+        "snapshot": { "type": "jsonb", "nullable": false, "note": "저장 시점 집계(plan stats)" },
+        "created_at": { "type": "timestamp with time zone", "nullable": false }
+      }
+    }
+  },
+
+  "relations": [
+    { "from": "plan_revisions.plan_id", "to": "plans.id", "kind": "N:1" },
+    { "from": "tasks.plan_id", "to": "plans.id", "kind": "N:1" },
+    { "from": "task_completions.task_id", "to": "tasks.id", "kind": "N:1" },
+    { "from": "runs.task_id", "to": "tasks.id", "kind": "N:1" },
+    { "from": "reviews.plan_id", "to": "plans.id", "kind": "N:1" },
+    { "from": "plans.from_review_id", "to": "reviews.id", "kind": "N:1 (다음 계획 → 회고)" }
+  ],
+
+  "aggregates": {
+    "scope": "해당 계획의 deleted_at is null 할 일. 주차를 고르면 due_date가 그 주(period_start부터 7일 단위) 안인 것만.",
+    "planned": "scope 할 일 수",
+    "done": "scope 중 status = 'done'",
+    "delayed": "scope 중 status = 'open' and due_date < 서울 오늘 (완료는 지연으로 세지 않음)",
+    "blocked": "scope 중 btrim(blocker) <> '' 인 runs가 하나 이상인 할 일 수",
+    "estimated_minutes": "scope 할 일 estimated_minutes 합 (없으면 0)",
+    "actual_minutes": "scope 할 일에 연결된 runs.actual_minutes 합 (없으면 0)",
+    "diff_minutes": "actual_minutes − estimated_minutes",
+    "evidence": "GET /api/plans/:id/evidence?metric=&week= 는 집계와 같은 조건으로 근거 행을 돌려준다."
+  }
+}
