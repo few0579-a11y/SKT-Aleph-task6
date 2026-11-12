@@ -30,6 +30,23 @@ details summary { cursor: pointer; color: var(--acc); font-weight: 600; }
 .rev.first { border-color: var(--acc); }
 .rev ul { margin: 4px 0; padding-left: 18px; }
 .old { color: var(--mute); text-decoration: line-through; }
+h3 { font-size: 1rem; margin: 18px 0 4px; }
+button.ghost { background: #fff; color: var(--acc); }
+button.danger { background: #fff; color: var(--warn); border-color: var(--warn); }
+.narrow { width: 7em; }
+.scroll { overflow-x: auto; }
+.sortline { margin: 12px 0 4px; }
+.sortline b { color: var(--acc); }
+.tag { display: inline-block; background: #eef3f1; color: var(--acc); border-radius: 10px; padding: 0 8px; margin: 2px 4px 0 0; font-size: .78rem; }
+.badge { font-size: .75rem; padding: 1px 8px; border-radius: 9px; border: 1px solid var(--line); white-space: nowrap; }
+.badge.done { color: #3a7d44; border-color: #3a7d44; }
+.badge.late { color: var(--warn); border-color: var(--warn); }
+tr.is-done .t-title { text-decoration: line-through; color: var(--mute); }
+td.actions { white-space: nowrap; }
+#tasks td:nth-child(4) { white-space: nowrap; }
+td.actions button { margin: 0 4px 4px 0; padding: 4px 10px; }
+details.edit { white-space: normal; min-width: 260px; }
+details.edit summary { font-weight: 400; }
 #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: #1d1d1f; color: #fff; padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; }
 #toast.show { opacity: 1; }
 @media (max-width: 600px) { .card { padding: 12px; } }

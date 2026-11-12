@@ -65,10 +65,12 @@ const toBody = (d) => ({ ...d, estimated_minutes: Number(d.estimated_minutes) })
 window.addEventListener('hashchange', route);
 route();
 async function route() {
-  const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
+  const [path, qs] = location.hash.replace(/^#\/?/, '').split('?');
+  const parts = path.split('/').filter(Boolean);
+  const q = Object.fromEntries(new URLSearchParams(qs || ''));
   app.replaceChildren(h('p', { class: 'muted' }, '불러오는 중…'));
   try {
-    if (parts[0] === 'plan' && parts[1]) await planPage(parts[1]);
+    if (parts[0] === 'plan' && parts[1]) await planPage(parts[1], q);
     else await homePage();
   } catch (e) {
     app.replaceChildren(h('p', { class: 'err' }, '오류: ' + e.message));
@@ -105,8 +107,12 @@ async function homePage() {
 }
 
 // ---------- 계획 상세: 현재 값 · 수정 · 이력 ----------
-async function planPage(pid) {
-  const [{ plan: p }, { revisions }] = await Promise.all([api(`plans/${pid}`), api(`plans/${pid}/revisions`)]);
+async function planPage(pid, q = {}) {
+  // 화면 상태(검색어·필터·정렬)는 주소(#/plan/1?sort=...)에 둔다 → 새로고침해도 유지
+  const tq = { q: q.q || '', status: q.status || '', priority: q.priority || '', sort: q.sort || 'due_date', dir: q.dir || 'asc' };
+  const [{ plan: p }, { revisions }, taskRes] = await Promise.all([
+    api(`plans/${pid}`), api(`plans/${pid}/revisions`),
+    api(`tasks?${new URLSearchParams({ plan_id: pid, ...tq })}`)]);
 
   const current = h('section', { class: 'card' },
     h('h2', {}, '현재 계획'),
@@ -148,5 +154,84 @@ async function planPage(pid) {
   app.replaceChildren(
     h('p', {}, h('a', { href: '#/' }, '← 계획 목록')),
     h('h1', {}, `계획 #${p.id} · `, p.title),
-    current, edit, history);
+    current, tasksCard(p, taskRes, tq), edit, history);
+}
+
+// ---------- 할 일 ----------
+const SORT_OPTIONS = [['due_date', '마감일'], ['priority', '우선순위'], ['estimated_minutes', '예상 시간'], ['created_at', '등록 시각'], ['title', '제목']];
+const opt = (value, label, cur) => h('option', { value, selected: value === cur }, label);
+
+function tasksCard(p, { tasks, sort }, tq) {
+  const go = (next) => {
+    const params = Object.fromEntries(Object.entries({ ...tq, ...next }).filter(([, v]) => v));
+    location.hash = `#/plan/${p.id}?${new URLSearchParams(params)}`;
+  };
+  const dateRange = { min: p.period_start, max: p.period_end };
+
+  const filters = h('form', { id: 'task-filter', class: 'row', onsubmit: (e) => { e.preventDefault(); go(formData(e.target)); } },
+    field('검색(제목·태그)', h('input', { name: 'q', value: tq.q, maxlength: 100 })),
+    field('상태', h('select', { name: 'status' }, opt('', '전체', tq.status), opt('open', '진행 중', tq.status), opt('done', '완료', tq.status))),
+    field('우선순위', h('select', { name: 'priority' }, opt('', '전체', tq.priority), ...Object.entries(PRIO).map(([k, v]) => opt(k, v, tq.priority)))),
+    field('정렬 기준', h('select', { name: 'sort' }, ...SORT_OPTIONS.map(([k, v]) => opt(k, v, tq.sort)))),
+    field('방향', h('select', { name: 'dir' }, opt('asc', '오름차순', tq.dir), opt('desc', '내림차순', tq.dir))),
+    h('button', { type: 'submit' }, '적용'),
+    h('button', { type: 'button', class: 'ghost', onclick: () => { location.hash = `#/plan/${p.id}`; } }, '초기화'));
+
+  const today = todaySeoul();
+  const rows = tasks.map((t) => {
+    const late = t.status === 'open' && t.due_date < today;
+    const state = t.status === 'done' ? ['완료', 'done'] : late ? ['지연', 'late'] : ['진행 중', ''];
+    return h('tr', { class: t.status === 'done' ? 'is-done' : '', 'data-task': t.id },
+      h('td', {}, t.id),
+      h('td', { class: 't-title' }, t.title, h('div', {}, ...t.tags.map((g) => h('span', { class: 'tag' }, g)))),
+      h('td', {}, h('span', { class: `badge ${state[1]}` }, state[0])),
+      h('td', {}, t.due_date),
+      h('td', {}, PRIO[t.priority]),
+      h('td', {}, fmtMin(t.estimated_minutes)),
+      h('td', { class: 'actions' },
+        t.status === 'done'
+          ? h('button', { class: 'ghost', onclick: guard(async () => { await api(`tasks/${t.id}/reopen`, { method: 'POST' }); toast('진행 중으로 되돌렸습니다'); route(); }) }, '완료 취소')
+          : h('button', { onclick: guard(async () => { await api(`tasks/${t.id}/complete`, { method: 'POST' }); toast('완료했습니다'); route(); }) }, '완료'),
+        h('button', { class: 'danger', onclick: guard(async () => {
+          if (!confirm(`할 일 #${t.id} "${t.title}"을(를) 삭제할까요?`)) return;
+          await api(`tasks/${t.id}`, { method: 'DELETE' }); toast('삭제했습니다'); route();
+        }) }, '삭제'),
+        taskEdit(t, dateRange)));
+  });
+
+  const addForm = h('form', { id: 'task-form', class: 'row', onsubmit: guard(async (e) => {
+    await api('tasks', { method: 'POST', body: { ...toTaskBody(formData(e.target)), plan_id: p.id } });
+    toast('할 일을 추가했습니다'); route();
+  }) }, ...taskFields({}, dateRange), h('button', { type: 'submit' }, '할 일 추가'));
+
+  return h('section', { class: 'card', id: 'tasks' },
+    h('h2', {}, '할 일'),
+    filters,
+    h('p', { class: 'sortline' }, '정렬 기준: ', h('b', { id: 'sort-label' }, sort.label), h('span', { class: 'muted' }, ` · ${tasks.length}건`)),
+    tasks.length
+      ? h('div', { class: 'scroll' }, h('table', {},
+          h('thead', {}, h('tr', {}, ...['ID', '할 일', '상태', '마감일', '우선순위', '예상', ''].map((x) => h('th', {}, x)))),
+          h('tbody', {}, ...rows)))
+      : h('p', { class: 'muted' }, '조건에 맞는 할 일이 없습니다.'),
+    h('h3', {}, '할 일 추가'), addForm);
+}
+
+function taskFields(t, range) {
+  return [
+    field('할 일', h('input', { name: 'title', required: true, maxlength: 200, value: t.title })),
+    field('마감일', h('input', { name: 'due_date', type: 'date', required: true, ...range, value: t.due_date })),
+    field('우선순위', prioSelect(t.priority)),
+    field('태그(쉼표로 구분)', h('input', { name: 'tags', maxlength: 200, value: (t.tags || []).join(', ') })),
+    field('예상 시간(분)', h('input', { name: 'estimated_minutes', type: 'number', min: 0, step: 1, required: true, class: 'narrow', value: t.estimated_minutes })),
+  ];
+}
+const toTaskBody = (d) => ({ ...d, estimated_minutes: Number(d.estimated_minutes) });
+
+function taskEdit(t, range) {
+  return h('details', { class: 'edit' },
+    h('summary', {}, '수정'),
+    h('form', { class: 'row', onsubmit: guard(async (e) => {
+      await api(`tasks/${t.id}`, { method: 'PATCH', body: toTaskBody(formData(e.target)) });
+      toast('할 일을 수정했습니다'); route();
+    }) }, ...taskFields(t, range), h('button', { type: 'submit' }, '수정 저장')));
 }

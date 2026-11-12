@@ -61,7 +61,29 @@ drop trigger if exists plan_revisions_block on plan_revisions;
 create trigger plan_revisions_block before update or delete on plan_revisions
   for each row execute function plan_revisions_block();
 
+-- ===== 카드 2: 할 일 =====
+
+-- 계획에 속한 할 일. 반복 활동은 결과 단위 할 일 하나 + 실행 기록 여러 개로 담는다.
+-- 삭제는 소프트 삭제(deleted_at). 목록·집계에서 빼고 행은 남긴다.
+create table if not exists tasks (
+  id                bigint generated always as identity primary key,
+  plan_id           bigint not null references plans(id),
+  title             text not null check (length(title) between 1 and 200),
+  due_date          date not null,          -- 계획 기간 안인지는 API에서 검사
+  priority          text not null check (priority in ('high', 'medium', 'low')),
+  tags              text[] not null default '{}',
+  estimated_minutes integer not null check (estimated_minutes >= 0),
+  status            text not null default 'open' check (status in ('open', 'done')),
+  completed_at      timestamptz,
+  deleted_at        timestamptz,
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now(),
+  check ((status = 'done') = (completed_at is not null))
+);
+create index if not exists tasks_plan_idx on tasks (plan_id) where deleted_at is null;
+
 -- Supabase 공개 REST(anon 키)로는 접근할 수 없게 RLS만 켜고 정책은 두지 않는다.
 -- 앱은 Vercel 서버 함수에서 DATABASE_URL로만 접근한다.
 alter table plans enable row level security;
 alter table plan_revisions enable row level security;
+alter table tasks enable row level security;

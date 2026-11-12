@@ -4,9 +4,11 @@ import { respond } from '../lib/handler.mjs';
 export default async function handler(req, res) {
   const url = new URL(req.url, 'http://x');
   const path = url.searchParams.get('__path') ?? url.pathname.replace(/^\/api\/?/, '');
+  url.searchParams.delete('__path');
+  const query = Object.fromEntries(url.searchParams);
   let body = req.body;
   if (typeof body === 'string') { try { body = JSON.parse(body || '{}'); } catch { body = {}; } }
-  const r = await respond({ method: req.method, path, body: body || {} });
+  const r = await respond({ method: req.method, path, query, body: body || {} });
   res.status(r.status);
   for (const [k, v] of Object.entries(r.headers)) res.setHeader(k, v);
   res.send(r.body);
