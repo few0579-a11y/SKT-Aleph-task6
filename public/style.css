@@ -47,6 +47,12 @@ td.actions { white-space: nowrap; }
 td.actions button { margin: 0 4px 4px 0; padding: 4px 10px; }
 details.edit { white-space: normal; min-width: 260px; }
 details.edit summary { font-weight: 400; }
+.nowrap { white-space: nowrap; }
+details.log { white-space: normal; min-width: 260px; margin-top: 4px; }
+details.log summary { font-weight: 400; }
+details.log ul { margin: 6px 0; padding-left: 18px; font-size: .85rem; }
+details.log .blocker { color: var(--warn); }
+details.log li.undone { color: var(--mute); }
 #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: #1d1d1f; color: #fff; padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; }
 #toast.show { opacity: 1; }
 @media (max-width: 600px) { .card { padding: 12px; } }

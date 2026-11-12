@@ -41,6 +41,12 @@ async function api(path, opts = {}) {
 const fmtTs = (iso) => new Intl.DateTimeFormat('ko-KR', { timeZone: TZ, dateStyle: 'medium', timeStyle: 'short', hour12: false }).format(new Date(iso));
 const fmtMin = (m) => { m = Number(m) || 0; return m >= 60 ? `${m}분 (${Math.floor(m / 60)}시간 ${m % 60}분)` : `${m}분`; };
 const todaySeoul = () => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date());
+// datetime-local 입력용 서울 현재 시각 'YYYY-MM-DDTHH:mm'
+function seoulNowLocal() {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .formatToParts(new Date()).map((x) => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`;
+}
 const show = (k, v) => (k === 'priority' ? PRIO[v] : k === 'estimated_minutes' ? fmtMin(v) : String(v));
 const formData = (form) => Object.fromEntries(new FormData(form).entries());
 const field = (label, input) => h('label', {}, label, input);
@@ -110,9 +116,12 @@ async function homePage() {
 async function planPage(pid, q = {}) {
   // 화면 상태(검색어·필터·정렬)는 주소(#/plan/1?sort=...)에 둔다 → 새로고침해도 유지
   const tq = { q: q.q || '', status: q.status || '', priority: q.priority || '', sort: q.sort || 'due_date', dir: q.dir || 'asc' };
-  const [{ plan: p }, { revisions }, taskRes] = await Promise.all([
+  const [{ plan: p }, { revisions }, taskRes, { runs }, { completions }] = await Promise.all([
     api(`plans/${pid}`), api(`plans/${pid}/revisions`),
-    api(`tasks?${new URLSearchParams({ plan_id: pid, ...tq })}`)]);
+    api(`tasks?${new URLSearchParams({ plan_id: pid, ...tq })}`),
+    api(`runs?plan_id=${pid}`), api(`completions?plan_id=${pid}`)]);
+  const byTask = (list) => list.reduce((m, x) => ((m[x.task_id] ||= []).push(x), m), {});
+  const ctx = { runsByTask: byTask(runs), completionsByTask: byTask(completions) };
 
   const current = h('section', { class: 'card' },
     h('h2', {}, '현재 계획'),
@@ -154,14 +163,69 @@ async function planPage(pid, q = {}) {
   app.replaceChildren(
     h('p', {}, h('a', { href: '#/' }, '← 계획 목록')),
     h('h1', {}, `계획 #${p.id} · `, p.title),
-    current, tasksCard(p, taskRes, tq), edit, history);
+    current, tasksCard(p, taskRes, tq, ctx), runsCard(runs), edit, history);
+}
+
+// ---------- 실행 기록 ----------
+const fmtRange = (r) => `${fmtTs(r.started_at)} ~ ${fmtTs(r.ended_at)}`;
+
+function runsCard(runs) {
+  const total = runs.reduce((a, r) => a + r.actual_minutes, 0);
+  return h('section', { class: 'card', id: 'runs' },
+    h('h2', {}, `실행 기록 · ${runs.length}건`),
+    h('p', { class: 'muted' }, `시각은 서울 시간 · 실제 시간 합계 ${fmtMin(total)} · 기록은 추가만 할 수 있습니다(계획·할 일 값은 바뀌지 않음)`),
+    runs.length
+      ? h('div', { class: 'scroll' }, h('table', {},
+          h('thead', {}, h('tr', {}, ...['기록', '할 일', '시작 ~ 종료', '실제', '막힘 사유'].map((x) => h('th', {}, x)))),
+          h('tbody', {}, ...runs.map((r) => h('tr', { 'data-run': r.id },
+            h('td', {}, `#${r.id}`),
+            h('td', {}, h('a', { href: `#task-${r.task_id}`, onclick: (e) => { e.preventDefault(); document.querySelector(`tr[data-task="${r.task_id}"]`)?.scrollIntoView({ block: 'center' }); } }, `#${r.task_id} `, r.task_title)),
+            h('td', { class: 'nowrap' }, fmtRange(r)),
+            h('td', { class: 'nowrap' }, fmtMin(r.actual_minutes)),
+            h('td', {}, r.blocker || '-'))))))
+      : h('p', { class: 'muted' }, '아직 실행 기록이 없습니다. 할 일의 "실행 기록"에서 추가하세요.'));
+}
+
+// 할 일 한 줄 안의 실행 기록·완료 기록 영역
+function taskLog(t, p, runs = [], completions = []) {
+  const now = seoulNowLocal();
+  const min = `${p.period_start}T00:00`;
+  const max = now < `${p.period_end}T23:59` ? now : `${p.period_end}T23:59`;
+  const preview = h('span', { class: 'muted' });
+  const form = h('form', { class: 'row', onsubmit: guard(async (e) => {
+    const d = formData(e.target);
+    const msg = `할 일 #${t.id}에 실행 기록을 추가할까요?\n${d.started_at.replace('T', ' ')} ~ ${d.ended_at.replace('T', ' ')}\n실제 ${d.actual_minutes || '(자동)'}분 · 막힘 ${d.blocker || '없음'}\n\n저장한 기록은 고치거나 지울 수 없습니다.`;
+    if (!confirm(msg)) return;
+    await api('runs', { method: 'POST', body: { task_id: t.id, ...d } });
+    toast('실행 기록을 저장했습니다'); route();
+  }), oninput: (e) => {
+    const f = e.currentTarget;
+    const a = Date.parse(f.started_at.value), b = Date.parse(f.ended_at.value);
+    preview.textContent = a && b && b > a ? `종료−시작 ${Math.round((b - a) / 60000)}분` : '';
+  } },
+    field('시작(서울)', h('input', { name: 'started_at', type: 'datetime-local', required: true, min, max })),
+    field('종료(서울)', h('input', { name: 'ended_at', type: 'datetime-local', required: true, min, max, value: max })),
+    field('실제(분, 비우면 자동)', h('input', { name: 'actual_minutes', type: 'number', min: 0, step: 1, class: 'narrow' })),
+    field('막힘 사유(선택)', h('input', { name: 'blocker', maxlength: 500 })),
+    h('button', { type: 'submit' }, '기록 추가'), preview);
+
+  return h('details', { class: 'log' },
+    h('summary', {}, `실행 기록 ${runs.length}건 · 완료 기록 ${completions.length}건`),
+    runs.length
+      ? h('ul', { class: 'runs' }, ...runs.map((r) => h('li', {}, `#${r.id} ${fmtRange(r)} · ${fmtMin(r.actual_minutes)}`, r.blocker ? h('span', { class: 'blocker' }, ' · 막힘: ', r.blocker) : null)))
+      : h('p', { class: 'muted' }, '실행 기록 없음'),
+    completions.length
+      ? h('ul', { class: 'completions' }, ...completions.map((c) => h('li', { class: c.undone_at ? 'undone' : '' },
+          `완료 #${c.id} ${fmtTs(c.completed_at)}`, c.undone_at ? ` → 취소 ${fmtTs(c.undone_at)}` : ' (유효)')))
+      : null,
+    form);
 }
 
 // ---------- 할 일 ----------
 const SORT_OPTIONS = [['due_date', '마감일'], ['priority', '우선순위'], ['estimated_minutes', '예상 시간'], ['created_at', '등록 시각'], ['title', '제목']];
 const opt = (value, label, cur) => h('option', { value, selected: value === cur }, label);
 
-function tasksCard(p, { tasks, sort }, tq) {
+function tasksCard(p, { tasks, sort, summary }, tq, ctx) {
   const go = (next) => {
     const params = Object.fromEntries(Object.entries({ ...tq, ...next }).filter(([, v]) => v));
     location.hash = `#/plan/${p.id}?${new URLSearchParams(params)}`;
@@ -180,6 +244,8 @@ function tasksCard(p, { tasks, sort }, tq) {
   const today = todaySeoul();
   const rows = tasks.map((t) => {
     const late = t.status === 'open' && t.due_date < today;
+    // 이 화면에서 이 할 일을 '완료'하려는 한 번의 의도 = 멱등성 키 하나. 두 번 눌러도 같은 키가 간다.
+    const completeKey = crypto.randomUUID();
     const state = t.status === 'done' ? ['완료', 'done'] : late ? ['지연', 'late'] : ['진행 중', ''];
     return h('tr', { class: t.status === 'done' ? 'is-done' : '', 'data-task': t.id },
       h('td', {}, t.id),
@@ -191,12 +257,18 @@ function tasksCard(p, { tasks, sort }, tq) {
       h('td', { class: 'actions' },
         t.status === 'done'
           ? h('button', { class: 'ghost', onclick: guard(async () => { await api(`tasks/${t.id}/reopen`, { method: 'POST' }); toast('진행 중으로 되돌렸습니다'); route(); }) }, '완료 취소')
-          : h('button', { onclick: guard(async () => { await api(`tasks/${t.id}/complete`, { method: 'POST' }); toast('완료했습니다'); route(); }) }, '완료'),
+          // 버튼을 막지 않는다: 두 번 눌러 요청이 두 번 가도 서버(키 + 유니크 제약)가 한 번만 기록한다
+          : h('button', { 'data-complete': t.id, onclick: guard(async () => {
+              const r = await api(`tasks/${t.id}/complete`, { method: 'POST', body: { idempotency_key: completeKey } });
+              toast(r.created ? '완료했습니다' : '이미 완료된 요청입니다(기록은 1건)');
+              if (r.created) route();
+            }) }, '완료'),
         h('button', { class: 'danger', onclick: guard(async () => {
           if (!confirm(`할 일 #${t.id} "${t.title}"을(를) 삭제할까요?`)) return;
           await api(`tasks/${t.id}`, { method: 'DELETE' }); toast('삭제했습니다'); route();
         }) }, '삭제'),
-        taskEdit(t, dateRange)));
+        taskEdit(t, dateRange),
+        taskLog(t, p, ctx.runsByTask[t.id], ctx.completionsByTask[t.id])));
   });
 
   const addForm = h('form', { id: 'task-form', class: 'row', onsubmit: guard(async (e) => {
@@ -206,6 +278,7 @@ function tasksCard(p, { tasks, sort }, tq) {
 
   return h('section', { class: 'card', id: 'tasks' },
     h('h2', {}, '할 일'),
+    h('p', { class: 'muted', id: 'task-summary' }, `전체 ${summary.total}건 · 완료 ${summary.done}건 (검색·필터와 무관한 계획 전체 기준)`),
     filters,
     h('p', { class: 'sortline' }, '정렬 기준: ', h('b', { id: 'sort-label' }, sort.label), h('span', { class: 'muted' }, ` · ${tasks.length}건`)),
     tasks.length

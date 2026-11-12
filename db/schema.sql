@@ -82,8 +82,92 @@ create table if not exists tasks (
 );
 create index if not exists tasks_plan_idx on tasks (plan_id) where deleted_at is null;
 
+-- ===== 카드 3: 완료 기록과 실행 기록 =====
+
+-- 완료 기록. 같은 요청(idempotency_key)은 한 번만, 한 할 일에 유효한(취소되지 않은) 완료는 하나만.
+-- 완료 취소는 기록을 지우지 않고 undone_at을 채운다. 다시 완료하면 새 기록이 생긴다.
+create table if not exists task_completions (
+  id              bigint generated always as identity primary key,
+  task_id         bigint not null references tasks(id),
+  idempotency_key uuid not null unique,
+  completed_at    timestamptz not null default now(),
+  undone_at       timestamptz,
+  check (undone_at is null or undone_at >= completed_at)
+);
+create unique index if not exists task_completions_one_active on task_completions (task_id) where undone_at is null;
+
+-- 완료 기록은 지울 수 없고, 바꿀 수 있는 것은 undone_at을 한 번 채우는 것뿐
+create or replace function task_completions_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then raise exception '완료 기록은 지울 수 없습니다'; end if;
+  if new.id <> old.id or new.task_id <> old.task_id or new.idempotency_key <> old.idempotency_key
+     or new.completed_at <> old.completed_at or old.undone_at is not null then
+    raise exception '완료 기록은 취소 시각만 한 번 기록할 수 있습니다';
+  end if;
+  return new;
+end $$;
+drop trigger if exists task_completions_guard on task_completions;
+create trigger task_completions_guard before update or delete on task_completions
+  for each row execute function task_completions_guard();
+
+-- 완료 처리(멱등). 할 일 행을 잠가 동시 요청을 줄 세운다.
+--  같은 키 재요청 → 새 기록 없음 / 이미 유효한 완료가 있음 → 새 기록 없음 / 그 밖 → 기록 1건 + 할 일 상태 done
+create or replace function complete_task(p_task bigint, p_key uuid) returns jsonb language plpgsql as $$
+declare t tasks; c task_completions;
+begin
+  select * into t from tasks where id = p_task and deleted_at is null for update;
+  if not found then raise exception '할 일을 찾을 수 없습니다' using errcode = 'P0002'; end if;
+  select * into c from task_completions where idempotency_key = p_key;
+  if found then
+    if c.task_id <> p_task then raise exception '다른 할 일에 쓰인 완료 키입니다' using errcode = '22023'; end if;
+    return jsonb_build_object('created', false, 'reason', 'same_key', 'completion_id', c.id);
+  end if;
+  select * into c from task_completions where task_id = p_task and undone_at is null;
+  if found then
+    return jsonb_build_object('created', false, 'reason', 'already_done', 'completion_id', c.id);
+  end if;
+  insert into task_completions (task_id, idempotency_key) values (p_task, p_key) returning * into c;
+  update tasks set status = 'done', completed_at = c.completed_at, updated_at = now() where id = p_task;
+  return jsonb_build_object('created', true, 'completion_id', c.id);
+end $$;
+
+create or replace function uncomplete_task(p_task bigint) returns jsonb language plpgsql as $$
+declare n int;
+begin
+  perform 1 from tasks where id = p_task and deleted_at is null for update;
+  if not found then raise exception '할 일을 찾을 수 없습니다' using errcode = 'P0002'; end if;
+  update task_completions set undone_at = now() where task_id = p_task and undone_at is null;
+  get diagnostics n = row_count;
+  update tasks set status = 'open', completed_at = null, updated_at = now() where id = p_task;
+  return jsonb_build_object('undone', n);
+end $$;
+
+-- 실행 기록. 계획·할 일 값은 건드리지 않는 별도 테이블이며 추가만 할 수 있다.
+create table if not exists runs (
+  id             bigint generated always as identity primary key,
+  task_id        bigint not null references tasks(id),
+  started_at     timestamptz not null,
+  ended_at       timestamptz not null,
+  actual_minutes integer not null check (actual_minutes >= 0),
+  blocker        text check (blocker is null or length(blocker) between 1 and 500),
+  created_at     timestamptz not null default now(),
+  check (ended_at > started_at),
+  check (actual_minutes <= ceil(extract(epoch from (ended_at - started_at)) / 60))
+);
+create index if not exists runs_task_idx on runs (task_id);
+
+create or replace function runs_block() returns trigger language plpgsql as $$
+begin
+  raise exception '실행 기록은 추가만 할 수 있습니다';
+end $$;
+drop trigger if exists runs_block on runs;
+create trigger runs_block before update or delete on runs
+  for each row execute function runs_block();
+
 -- Supabase 공개 REST(anon 키)로는 접근할 수 없게 RLS만 켜고 정책은 두지 않는다.
 -- 앱은 Vercel 서버 함수에서 DATABASE_URL로만 접근한다.
 alter table plans enable row level security;
 alter table plan_revisions enable row level security;
 alter table tasks enable row level security;
+alter table task_completions enable row level security;
+alter table runs enable row level security;
