@@ -23,7 +23,7 @@ const targets = ['/', '/app.js', '/style.css', '/api/health', '/api/plans', '/ap
   '/api/does-not-exist', '/api/tasks/abc', '/api/plans/1/stats?week=99'];  // 오류 응답도 포함
 const leaks = [];
 for (const path of targets) {
-  const r = await fetch(BASE + path);
+  const r = await fetch(BASE + path, { signal: AbortSignal.timeout(20_000) }); // 응답이 없으면 20초 뒤 실패로 끝냄
   const body = await r.text();
   const headers = [...r.headers].map(([k, v]) => `${k}: ${v}`).join('\n');
   const found = hit(body) || hit(headers);
@@ -37,7 +37,7 @@ for (const path of targets) {
 check(`배포 파일·API 응답·오류 응답 ${targets.length}곳에 비밀값 없음`, leaks.length === 0, leaks.join(' / '));
 
 // 2) 화면 코드가 사용자 입력을 HTML로 해석하지 않는지
-const appJs = await (await fetch(BASE + '/app.js')).text();
+const appJs = await (await fetch(BASE + '/app.js', { signal: AbortSignal.timeout(20_000) })).text();
 const risky = ['innerHTML', 'outerHTML', 'insertAdjacentHTML', 'document.write', 'eval(', 'new Function'].filter((k) => appJs.includes(k));
 check('화면 코드에 HTML 해석 API 없음(textContent로만 그림)', risky.length === 0, risky.join(', '));
 
