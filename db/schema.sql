@@ -164,6 +164,32 @@ drop trigger if exists runs_block on runs;
 create trigger runs_block before update or delete on runs
   for each row execute function runs_block();
 
+-- ===== 카드 4: 회고와 다음 계획 반영 =====
+
+-- 회고. 저장 시점 집계(snapshot)와 다음 계획에 넘길 개선점 한 줄. 추가만 할 수 있다.
+create table if not exists reviews (
+  id          bigint generated always as identity primary key,
+  plan_id     bigint not null references plans(id),
+  scope_from  date,                  -- 주차를 골랐을 때 범위(마감일 기준), 계획 전체면 null
+  scope_to    date,
+  improvement text not null check (length(improvement) between 1 and 300),
+  snapshot    jsonb not null,
+  created_at  timestamptz not null default now(),
+  check ((scope_from is null) = (scope_to is null))
+);
+
+create or replace function reviews_block() returns trigger language plpgsql as $$
+begin
+  raise exception '회고는 추가만 할 수 있습니다';
+end $$;
+drop trigger if exists reviews_block on reviews;
+create trigger reviews_block before update or delete on reviews
+  for each row execute function reviews_block();
+
+-- 다음 계획: 어느 회고에서 왔는지와 그때의 개선점 문장(복사본)
+alter table plans add column if not exists from_review_id bigint references reviews(id);
+alter table plans add column if not exists carried_improvement text;
+
 -- Supabase 공개 REST(anon 키)로는 접근할 수 없게 RLS만 켜고 정책은 두지 않는다.
 -- 앱은 Vercel 서버 함수에서 DATABASE_URL로만 접근한다.
 alter table plans enable row level security;
@@ -171,3 +197,4 @@ alter table plan_revisions enable row level security;
 alter table tasks enable row level security;
 alter table task_completions enable row level security;
 alter table runs enable row level security;
+alter table reviews enable row level security;

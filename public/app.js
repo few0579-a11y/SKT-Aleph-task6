@@ -76,16 +76,19 @@ async function route() {
   const q = Object.fromEntries(new URLSearchParams(qs || ''));
   app.replaceChildren(h('p', { class: 'muted' }, '불러오는 중…'));
   try {
-    if (parts[0] === 'plan' && parts[1]) await planPage(parts[1], q);
-    else await homePage();
+    if (parts[0] === 'plan' && parts[1] && parts[2] === 'review') await reviewPage(parts[1], q);
+    else if (parts[0] === 'plan' && parts[1]) await planPage(parts[1], q);
+    else await homePage(q);
   } catch (e) {
     app.replaceChildren(h('p', { class: 'err' }, '오류: ' + e.message));
   }
 }
 
 // ---------- 계획 목록 + 새 계획 ----------
-async function homePage() {
+async function homePage(q = {}) {
   const { plans } = await api('plans');
+  // 회고에서 '다음 계획 만들기'로 들어온 경우
+  const review = q.from_review ? (await api(`reviews/${encodeURIComponent(q.from_review)}`)).review : null;
   const list = h('section', { class: 'card' },
     h('h2', {}, `계획 ${plans.length}개`),
     plans.length
@@ -93,7 +96,8 @@ async function homePage() {
           h('thead', {}, h('tr', {}, ...['ID', '제목', '기간', '우선순위', '예상 시간', '버전'].map((t) => h('th', {}, t)))),
           h('tbody', {}, ...plans.map((p) => h('tr', {},
             h('td', {}, p.id),
-            h('td', {}, h('a', { href: `#/plan/${p.id}` }, p.title)),
+            h('td', {}, h('a', { href: `#/plan/${p.id}` }, p.title),
+              p.carried_improvement ? h('div', { class: 'muted' }, `↳ 회고 #${p.from_review_id} 개선점: `, p.carried_improvement) : null),
             h('td', {}, `${p.period_start} ~ ${p.period_end}`),
             h('td', {}, PRIO[p.priority]),
             h('td', {}, fmtMin(p.estimated_minutes)),
@@ -101,15 +105,17 @@ async function homePage() {
       : h('p', { class: 'muted' }, '아직 계획이 없습니다. 지금 실제로 하고 있는 일 하나를 아래에서 등록하세요.'));
 
   const form = h('form', { id: 'plan-form', class: 'card', onsubmit: guard(async (e) => {
-    const { plan } = await api('plans', { method: 'POST', body: toBody(formData(e.target)) });
+    const { plan } = await api('plans', { method: 'POST', body: { ...toBody(formData(e.target)), from_review_id: review?.id } });
     toast('계획을 저장했습니다');
     location.hash = `#/plan/${plan.id}`;
   }) },
-    h('h2', {}, '새 계획 등록'),
+    h('h2', {}, review ? `회고 #${review.id}를 반영한 다음 계획 만들기` : '새 계획 등록'),
+    review ? h('div', { class: 'carry' }, '반영할 개선점: ', h('b', {}, review.improvement)) : null,
     ...planFields(),
     h('div', { class: 'row' }, h('button', { type: 'submit' }, '계획 저장')));
 
-  app.replaceChildren(h('h1', {}, '계획'), list, form);
+  app.replaceChildren(h('h1', {}, '계획'), review ? form : list, review ? list : form);
+  if (review) form.querySelector('input[name=title]').focus();
 }
 
 // ---------- 계획 상세: 현재 값 · 수정 · 이력 ----------
@@ -161,9 +167,120 @@ async function planPage(pid, q = {}) {
     }));
 
   app.replaceChildren(
-    h('p', {}, h('a', { href: '#/' }, '← 계획 목록')),
+    h('p', { class: 'row nav' }, h('a', { href: '#/' }, '← 계획 목록'), h('a', { class: 'btn', href: `#/plan/${p.id}/review` }, '회고 보기 →')),
     h('h1', {}, `계획 #${p.id} · `, p.title),
+    p.carried_improvement ? h('div', { class: 'carry' }, `회고 #${p.from_review_id}에서 반영한 개선점: `, h('b', {}, p.carried_improvement)) : null,
     current, tasksCard(p, taskRes, tq, ctx), runsCard(runs), edit, history);
+}
+
+// ---------- 회고 ----------
+const METRICS = [
+  ['planned', '계획 수', (s) => `${s.planned}건`],
+  ['done', '완료 수', (s) => `${s.done}건`],
+  ['delayed', '지연 수', (s) => `${s.delayed}건`],
+  ['blocked', '막힘 수', (s) => `${s.blocked}건`],
+  ['estimated', '예상 시간', (s) => fmtMin(s.estimated_minutes)],
+  ['actual', '실제 시간', (s) => fmtMin(s.actual_minutes)],
+  ['diff', '차이(실제−예상)', (s) => fmtSigned(s.diff_minutes)],
+];
+const fmtSigned = (m) => (m > 0 ? '+' : '') + fmtMin(m);
+
+async function reviewPage(pid, q) {
+  const week = q.week || '';
+  const show = q.show || '';
+  const wq = week ? `?week=${encodeURIComponent(week)}` : '';
+  const [{ plan: p }, { stats, weeks }, { reviews, next_plans }, ev] = await Promise.all([
+    api(`plans/${pid}`), api(`plans/${pid}/stats${wq}`), api(`plans/${pid}/reviews`),
+    show ? api(`plans/${pid}/evidence?${new URLSearchParams({ metric: show, ...(week ? { week } : {}) })}`) : null]);
+  const link = (next) => {
+    const params = Object.fromEntries(Object.entries({ week, show, ...next }).filter(([, v]) => v));
+    const qs = new URLSearchParams(params).toString();
+    return `#/plan/${p.id}/review${qs ? '?' + qs : ''}`;
+  };
+  const scopeLabel = stats.scope ? weeks.find((w) => w.n === stats.scope.week).label : `계획 전체 (${p.period_start} ~ ${p.period_end})`;
+
+  const scopeNav = h('p', { class: 'row', id: 'scope' }, '범위: ',
+    h('a', { class: 'chip' + (week ? '' : ' on'), href: link({ week: '', show }) }, '계획 전체'),
+    ...weeks.map((w) => h('a', { class: 'chip' + (String(w.n) === week ? ' on' : ''), href: link({ week: String(w.n), show }) }, w.label)));
+
+  const tiles = h('section', { class: 'card', id: 'stats' },
+    h('h2', {}, '회고 집계'),
+    h('p', { class: 'muted' }, `${scopeLabel} · 서울 기준 오늘 ${stats.today_seoul} · 시간 단위: 분 · 숫자를 누르면 근거 기록이 아래에 열립니다`),
+    h('div', { class: 'stats' }, ...METRICS.map(([k, label, fmt]) =>
+      h('a', { class: 'stat' + (show === k ? ' on' : ''), href: link({ show: k }), 'data-metric': k }, h('b', {}, fmt(stats)), h('span', {}, label)))));
+
+  const evidence = ev ? evidenceCard(ev, stats, link) : null;
+
+  const form = h('form', { id: 'review-form', class: 'row', onsubmit: guard(async (e) => {
+    const d = formData(e.target);
+    const msg = `회고를 저장할까요?\n범위: ${scopeLabel}\n개선점: ${d.improvement}\n\n지금의 집계 값이 함께 저장되며, 회고는 고치거나 지울 수 없습니다.`;
+    if (!confirm(msg)) return;
+    await api('reviews', { method: 'POST', body: { plan_id: p.id, week: week || undefined, improvement: d.improvement } });
+    toast('회고를 저장했습니다'); route();
+  }) },
+    h('label', { class: 'grow' }, `다음 계획에 반영할 개선점 한 줄 (범위: ${scopeLabel})`, h('input', { name: 'improvement', required: true, maxlength: 300 })),
+    h('button', { type: 'submit' }, '회고 저장'));
+
+  const nextOf = (rid) => next_plans.filter((x) => x.from_review_id === rid);
+  const list = reviews.length
+    ? h('div', { class: 'scroll' }, h('table', { id: 'review-list' },
+        h('thead', {}, h('tr', {}, ...['회고', '저장 시각', '범위', '개선점', '저장 시점 집계', '다음 계획'].map((x) => h('th', {}, x)))),
+        h('tbody', {}, ...reviews.map((r) => {
+          const sn = r.snapshot;
+          return h('tr', { 'data-review': r.id },
+            h('td', {}, `#${r.id}`), h('td', { class: 'nowrap' }, fmtTs(r.created_at)),
+            h('td', { class: 'nowrap' }, r.scope_from ? `${r.scope_from} ~ ${r.scope_to}` : '계획 전체'),
+            h('td', {}, r.improvement),
+            h('td', { class: 'muted' }, `계획 ${sn.planned} · 완료 ${sn.done} · 지연 ${sn.delayed} · 막힘 ${sn.blocked} · 예상 ${sn.estimated_minutes} · 실제 ${sn.actual_minutes} · 차이 ${sn.diff_minutes}분 (오늘 ${sn.today_seoul})`),
+            h('td', {}, ...nextOf(r.id).map((n) => h('div', {}, h('a', { href: `#/plan/${n.id}` }, `계획 #${n.id} `, n.title))),
+              h('a', { href: `#/?from_review=${r.id}` }, '이 개선점으로 다음 계획 만들기')));
+        }))))
+    : h('p', { class: 'muted' }, '아직 저장한 회고가 없습니다.');
+
+  app.replaceChildren(
+    h('p', { class: 'row nav' }, h('a', { href: `#/plan/${p.id}` }, `← 계획 #${p.id}`)),
+    h('h1', {}, `회고 · 계획 #${p.id} `, p.title),
+    scopeNav, tiles, evidence,
+    h('section', { class: 'card', id: 'reviews' }, h('h2', {}, '회고 → 다음 계획'), form, h('h3', {}, '저장한 회고'), list));
+  if (show) document.getElementById('evidence')?.scrollIntoView({ block: 'start' });
+}
+
+function evidenceCard(ev, stats, link) {
+  const shown = { planned: stats.planned, done: stats.done, delayed: stats.delayed, blocked: stats.blocked, estimated: stats.estimated_minutes, actual: stats.actual_minutes, diff: stats.diff_minutes }[ev.metric];
+  const fromRows = { planned: ev.totals.count, done: ev.totals.count, delayed: ev.totals.count, blocked: ev.totals.count,
+    estimated: ev.totals.estimated_minutes, actual: ev.totals.actual_minutes, diff: ev.totals.actual_minutes - ev.totals.estimated_minutes }[ev.metric];
+  const unit = ['planned', 'done', 'delayed', 'blocked'].includes(ev.metric) ? '건' : '분';
+  const check = h('p', { class: 'check ' + (shown === fromRows ? 'ok' : 'bad'), id: 'evidence-check' },
+    `집계 값 ${shown}${unit} = 아래 근거 기록에서 계산한 값 ${fromRows}${unit} ${shown === fromRows ? '✓ 일치' : '✗ 불일치'}`);
+
+  const taskTable = ev.tasks ? (ev.tasks.length
+    ? h('div', { class: 'scroll' }, h('table', {},
+        h('thead', {}, h('tr', {}, ...['ID', '할 일', '상태', '마감일', '예상', '실제(기록 수)', '차이'].map((x) => h('th', {}, x)))),
+        h('tbody', {}, ...ev.tasks.map((t) => h('tr', { 'data-task': t.id },
+          h('td', {}, t.id), h('td', {}, h('a', { href: `#/plan/${t.plan_id}` }, t.title)),
+          h('td', {}, t.status === 'done' ? '완료' : '진행 중'), h('td', { class: 'nowrap' }, t.due_date),
+          h('td', { class: 'nowrap' }, `${t.estimated_minutes}분`), h('td', { class: 'nowrap' }, `${t.actual_minutes}분 (${t.run_count}건)`),
+          h('td', { class: 'nowrap' }, `${t.actual_minutes - t.estimated_minutes > 0 ? '+' : ''}${t.actual_minutes - t.estimated_minutes}분`)))),
+        h('tfoot', {}, h('tr', {}, h('td', { colspan: 4 }, `합계 ${ev.totals.count}건`),
+          h('td', {}, `${ev.totals.estimated_minutes}분`), h('td', {}, `${ev.totals.actual_minutes}분`),
+          h('td', {}, `${ev.totals.actual_minutes - ev.totals.estimated_minutes}분`)))))
+    : h('p', { class: 'muted' }, '해당하는 할 일이 없습니다(0건).')) : null;
+
+  const runTable = ev.runs ? (ev.runs.length
+    ? h('div', { class: 'scroll' }, h('table', {},
+        h('thead', {}, h('tr', {}, ...['기록', '할 일', '시작 ~ 종료', '실제', '막힘 사유'].map((x) => h('th', {}, x)))),
+        h('tbody', {}, ...ev.runs.map((r) => h('tr', { 'data-run': r.id },
+          h('td', {}, `#${r.id}`), h('td', {}, `#${r.task_id} `, r.task_title), h('td', { class: 'nowrap' }, fmtRange(r)),
+          h('td', { class: 'nowrap' }, `${r.actual_minutes}분`), h('td', {}, r.blocker || '-'))))))
+    : h('p', { class: 'muted' }, '해당하는 실행 기록이 없습니다(0건).')) : null;
+
+  return h('section', { class: 'card', id: 'evidence', 'data-metric': ev.metric },
+    h('h2', {}, `근거: ${ev.label}`),
+    h('p', { class: 'muted' }, '규칙: ', ev.rule),
+    check,
+    ev.metric === 'blocked' ? h('h3', {}, '막힌 할 일') : null, taskTable,
+    ev.metric === 'blocked' ? h('h3', {}, '막힘 사유가 적힌 실행 기록') : null, runTable,
+    h('p', {}, h('a', { href: link({ show: '' }) }, '근거 닫기')));
 }
 
 // ---------- 실행 기록 ----------
