@@ -381,7 +381,7 @@ async function calendarPage(pid, q) {
         h('a', { class: 'btn ghost', href: `#/plan/${p.id}/calendar?month=${prevMonth}`, 'aria-label': '이전 달' }, '‹'),
         h('h2', {}, `${y}년 ${m}월`),
         h('a', { class: 'btn ghost', href: `#/plan/${p.id}/calendar?month=${nextMonth}`, 'aria-label': '다음 달' }, '›')),
-      h('p', { class: 'muted' }, '색칠된 날 = 계획 기간 · 날짜 칸에 마감인 할 일과 그날 공부한 시간이 보입니다 · 날짜를 누르면 자세히'),
+      h('p', { class: 'muted' }, '색칠된 날 = 계획 기간 · 날짜 칸에 마감인 할 일(좁은 화면에서는 태그 색 점)과 그날 공부한 시간이 보입니다 · 날짜를 누르면 자세히'),
       grid),
     dayPanel);
 }
