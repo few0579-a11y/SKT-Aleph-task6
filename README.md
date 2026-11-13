@@ -27,6 +27,7 @@
 3. **실행 기록과 중복 완료 방지**: `runs`(시작·종료·실제 시간·막힘 사유, 추가만 가능, 계획 값을 바꾸지 않음). 완료는 화면이 만든 멱등성 키 + DB 유니크 제약(할 일당 유효 완료 1건)으로 한 번만 기록한다. 버튼 비활성화에 의존하지 않는다.
 4. **회고**: 계획 전체·주차별 집계(계획·완료·지연·막힘·예상·실제·차이). 숫자를 누르면 같은 조건으로 뽑은 근거 기록이 열리고 일치 여부를 표시한다. 회고(개선점 + 저장 시점 집계)에서 다음 계획을 만들면 회고 ID와 개선점이 연결된다.
 5. **공개 범위 안내·내보내기**: 모든 화면 맨 위 안내 문구, 전체 데이터를 JSON 파일 하나로 내보내기(`/api/export`).
+6. **타임테이블·캘린더**: 계획 화면 탭(개요·할 일 / 타임테이블 / 캘린더 / 회고). 주간 타임테이블은 실행 기록을 요일×시간 블록으로 보여 주고(하루를 어떻게 썼는지), 태그별 색을 바꿔 서버(`tag_colors`)에 저장할 수 있다. 월간 캘린더는 계획 기간, 날짜별 마감 할 일과 공부 시간을 보여 준다.
 
 ## 규칙
 - 날짜(`date`)는 서울 달력 날짜 `YYYY-MM-DD` 그대로, 시각(`timestamptz`)은 UTC 저장·서울 표시, 시간 수치는 모두 **분**.
@@ -39,6 +40,7 @@
 - 완료: `POST /api/tasks/:id/complete` (body `idempotency_key`: UUID), `POST /api/tasks/:id/reopen`, `GET /api/tasks/:id/completions`, `GET /api/completions?plan_id`
 - 실행 기록: `GET /api/runs?plan_id&task_id`, `POST /api/runs`
 - 회고: `GET /api/plans/:id/stats?week`, `GET /api/plans/:id/evidence?metric&week`, `GET /api/plans/:id/reviews`, `POST /api/reviews`, `GET /api/reviews/:id`
+- 태그 색: `GET /api/tag-colors`, `PUT /api/tag-colors` (body `tag`, `color`: `#rrggbb`)
 - 내보내기: `GET /api/export`
 
 ## 비밀값
