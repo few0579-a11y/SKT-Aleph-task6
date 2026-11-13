@@ -6,6 +6,9 @@ import { respond } from './lib/handler.mjs';
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 const port = Number(process.env.PORT || 3000);
+// LOCAL_SERIAL=1: API 요청을 하나씩 처리한다. 연결 하나에 세션 하나만 지원하는 로컬 테스트 DB(PGlite)용.
+let queue = Promise.resolve();
+const serial = (fn) => (process.env.LOCAL_SERIAL ? (queue = queue.then(fn, fn)) : fn());
 
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
@@ -14,7 +17,7 @@ http.createServer(async (req, res) => {
     for await (const c of req) raw += c;
     let body = {};
     try { body = raw ? JSON.parse(raw) : {}; } catch { body = {}; }
-    const r = await respond({ method: req.method, path: url.pathname.slice(5), query: Object.fromEntries(url.searchParams), body });
+    const r = await serial(() => respond({ method: req.method, path: url.pathname.slice(5), query: Object.fromEntries(url.searchParams), body }));
     res.writeHead(r.status, r.headers).end(r.body);
     return;
   }

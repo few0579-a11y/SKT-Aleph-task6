@@ -190,6 +190,15 @@ create trigger reviews_block before update or delete on reviews
 alter table plans add column if not exists from_review_id bigint references reviews(id);
 alter table plans add column if not exists carried_improvement text;
 
+-- ===== 화면: 태그 색 =====
+
+-- 타임테이블·캘린더에서 태그별로 쓸 색. 정하지 않은 태그는 화면이 기본 색을 고른다.
+create table if not exists tag_colors (
+  tag        text primary key check (length(tag) between 1 and 30),
+  color      text not null check (color ~ '^#[0-9a-f]{6}$'),
+  updated_at timestamptz not null default now()
+);
+
 -- Supabase 공개 REST(anon 키)로는 접근할 수 없게 RLS만 켜고 정책은 두지 않는다.
 -- 앱은 Vercel 서버 함수에서 DATABASE_URL로만 접근한다.
 alter table plans enable row level security;
@@ -198,3 +207,4 @@ alter table tasks enable row level security;
 alter table task_completions enable row level security;
 alter table runs enable row level security;
 alter table reviews enable row level security;
+alter table tag_colors enable row level security;

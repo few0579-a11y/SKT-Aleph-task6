@@ -20,7 +20,8 @@
     "run_time": "runs는 ended_at > started_at, 계획 기간(서울 시간) 안, 종료 시각이 현재보다 늦지 않아야 한다. actual_minutes는 비우면 종료−시작(분, 반올림), 직접 적으면 종료−시작(올림) 이하.",
     "idempotent_completion": "complete_task(task, key): 같은 idempotency_key 재요청이나 이미 유효한 완료가 있으면 새 기록을 만들지 않는다. 최종 방어는 유니크 제약 두 개(idempotency_key, task_id where undone_at is null).",
     "sorting": "할 일 목록 정렬 = 화면에서 고른 기준(마감일·우선순위·예상 시간·등록 시각·제목)과 방향 → 같으면 id 오름차순. 정렬·검색·필터는 서버(SQL)에서 처리한다.",
-    "access": "로그인 없음(T07에서 적용). 모든 테이블 RLS 켜짐·정책 없음, Supabase Data API 꺼짐. 앱은 Vercel 서버 함수에서 DATABASE_URL로만 접근한다."
+    "access": "로그인 없음(T07에서 적용). 모든 테이블 RLS 켜짐·정책 없음, Supabase Data API 꺼짐. 앱은 Vercel 서버 함수에서 DATABASE_URL로만 접근한다.",
+    "timetable": "타임테이블·캘린더는 runs의 started_at~ended_at을 서울 시간으로 바꿔 날짜·시각 칸에 그린다. 블록 색은 할 일의 첫 번째 태그 색(tag_colors, 없으면 기본 색). 실제 시간 합계는 actual_minutes를 쓴다."
   },
 
   "tables": {
@@ -102,6 +103,14 @@
         "improvement": { "type": "text", "nullable": false, "note": "다음 계획에 반영할 개선점 한 줄(1~300자)" },
         "snapshot": { "type": "jsonb", "nullable": false, "note": "저장 시점 집계(plan stats)" },
         "created_at": { "type": "timestamp with time zone", "nullable": false }
+      }
+    },
+    "tag_colors": {
+      "description": "타임테이블·캘린더에서 태그별로 쓰는 색(사용자가 바꿀 수 있음, 정하지 않은 태그는 화면 기본 색)",
+      "columns": {
+        "tag": { "type": "text", "nullable": false, "note": "PK, 1~30자(tasks.tags의 값)" },
+        "color": { "type": "text", "nullable": false, "note": "#rrggbb 소문자" },
+        "updated_at": { "type": "timestamp with time zone", "nullable": false }
       }
     }
   },
